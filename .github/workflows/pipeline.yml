@@ -1,0 +1,43 @@
+name: Update Short Interest Monitor
+
+on:
+  schedule:
+    # FINRA publica ~día 9 y ~día 24 de cada mes
+    # Corremos el día siguiente a cada publicación
+    - cron: '0 14 10,25 * *'
+  workflow_dispatch:   # permite correr manualmente desde Actions tab
+
+permissions:
+  contents: write      # necesario para hacer push del index.html y parquets
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # Yahoo Finance puede ser lento con 9k tickers
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # historia completa para que los parquets acumulen bien
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        run: python pipeline/run_pipeline.py
+
+      - name: Commit & push updates
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/history/ data/latest/ data/registry.json docs/index.html
+          git diff --cached --quiet && echo "Sin cambios" || \
+            git commit -m "chore: short interest update $(date -u +%Y-%m-%d)"
+          git push
