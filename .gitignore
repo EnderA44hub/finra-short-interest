@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+.venv/
+
+# Data -- raw y processed no se suben a git (pesados)
+data/raw/
+data/processed/
+data/cache/
+
+# Si se suben al repo:
+# data/history/       <- serie historica acumulada
+# data/latest/        <- snapshot mas reciente
+# data/registry.json  <- estado del pipeline
+
+# Logs
+logs/
+
+# OS
+.DS_Store
