@@ -1,53 +1,30 @@
 """
-extract.py -- Descarga el bulk file de short interest desde la API publica de FINRA.
-Solo extrae: ticker · date · short_interest_shares · exchange
+extract.py -- Descarga el bulk CSV de short interest desde FINRA.
 
-Dataset actual (post abril 2021):
-  POST https://api.finra.org/data/group/otcMarket/name/equityShortInterestStandardized
+IMPORTANTE: El endpoint API otcMarket/equityShortInterestStandardized
+es SOLO para acciones OTC. NYSE/NASDAQ NO aparecen ahí.
 
-Campos relevantes:
-  securitiesInformationProcessorSymbolIdentifier -> ticker
-  settlementDate                                 -> date
-  currentShortPositionQuantity                   -> short_interest_shares
-  marketClassCode                                -> market       (siempre "OTC" — no sirve)
-  issuerServicesGroupExchangeCode                -> exchange     ← el que realmente distingue NYSE/NASDAQ
+Desde junio 2021, FINRA publica los datos consolidados (NYSE + NASDAQ + OTC)
+como archivos CSV públicos en:
+  https://cdn.finra.org/equity/otcmarket/biweekly/shrt{YYYYMMDD}.csv
 """
 
+import io
 import json
 import requests
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import date, timedelta, datetime
 
 ROOT     = Path(__file__).parent.parent
 RAW_DIR  = ROOT / "data" / "raw"
 REGISTRY = ROOT / "data" / "registry.json"
 
-FINRA_URL = "https://api.finra.org/data/group/otcMarket/name/equityShortInterestStandardized"
+FINRA_CSV_URL = "https://cdn.finra.org/equity/otcmarket/biweekly/shrt{date}.csv"
 
 HEADERS = {
-    "Content-Type": "application/json",
-    "Accept":        "application/json",
-}
-
-# Mapeo de campos FINRA -> nombres internos
-FIELD_CANDIDATES = {
-    # ticker
-    "securitiesInformationProcessorSymbolIdentifier": "ticker",
-    "symbolCode":            "ticker",
-    "issueSymbolIdentifier": "ticker",
-    # fecha
-    "settlementDate":        "date",
-    # short interest
-    "currentShortPositionQuantity": "short_interest_shares",
-    "totalShortInterest":           "short_interest_shares",
-    "currentShortInterest":         "short_interest_shares",
-    "currentShortShareNumber":      "short_interest_shares",
-    # mercado (marketClassCode siempre vale "OTC" — no usar para filtrar)
-    "marketClassCode":       "market",
-    "marketCategoryCode":    "market",
-    # exchange real — distingue NYSE / NASDAQ / OTC
-    "issuerServicesGroupExchangeCode": "exchange",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept":     "*/*",
 }
 
 
@@ -65,172 +42,130 @@ def _already_downloaded(date_str: str) -> bool:
     return date_str in _load_registry()["processed_dates"]
 
 
-# ── descubrir campos disponibles ──────────────────────────────────────────────
+# ── encontrar el CSV más reciente ─────────────────────────────────────────────
 
-def discover_fields() -> tuple[dict, list]:
-    """Hace una peticion de 1 fila para descubrir que campos devuelve FINRA."""
-    payload = {"limit": 1}
-    resp = requests.post(FINRA_URL, headers=HEADERS, json=payload, timeout=30)
-    resp.raise_for_status()
-    sample = resp.json()
-
-    if not sample:
-        raise ValueError("FINRA devolvio lista vacia en discovery")
-
-    available = set(sample[0].keys())
-    print(f"   Campos disponibles en FINRA: {sorted(available)}")
-
-    mapping = {}
-    seen_internal = set()
-    for finra_field, internal_name in FIELD_CANDIDATES.items():
-        if finra_field in available and internal_name not in seen_internal:
-            mapping[finra_field] = internal_name
-            seen_internal.add(internal_name)
-
-    print(f"   Mapeo activo: {mapping}")
-
-    required = {"ticker", "date", "short_interest_shares"}
-    missing = required - set(mapping.values())
-    if missing:
-        raise ValueError(
-            f"No se encontraron campos requeridos: {missing}. "
-            f"Campos FINRA disponibles: {sorted(available)}"
-        )
-    return mapping, list(available)
-
-
-# ── obtener fecha más reciente ────────────────────────────────────────────────
-
-def fetch_latest_date(all_fields: list) -> str:
+def find_latest_date() -> str:
     """
-    FINRA no soporta sortFields ni GREATER_THAN.
-    Prueba cada día hacia atrás con EQUAL hasta encontrar una fecha con datos.
+    FINRA publica el CSV ~día 15 y ~último día hábil de cada mes.
+    Prueba fechas hacia atrás hasta encontrar un archivo disponible.
     """
+    today = date.today()
+    print(f"   Buscando CSV más reciente (desde {today})...")
+
     for days_back in range(0, 46):
-        candidate = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        payload = {
-            "limit": 1,
-            "fields": ["settlementDate"] if "settlementDate" in all_fields else [],
-            "compareFilters": [{
-                "fieldName":   "settlementDate",
-                "fieldValue":  candidate,
-                "compareType": "EQUAL",
-            }],
-        }
+        candidate = today - timedelta(days=days_back)
+        date_str  = candidate.strftime("%Y%m%d")
+        url       = FINRA_CSV_URL.format(date=date_str)
+
         try:
-            resp = requests.post(FINRA_URL, headers=HEADERS, json=payload, timeout=15)
+            # HEAD request para verificar sin descargar
+            resp = requests.head(url, headers=HEADERS, timeout=10, allow_redirects=True)
             if resp.status_code == 200:
-                data = resp.json()
-                if data and data[0].get("settlementDate") == candidate:
-                    print(f"   ✓ Fecha más reciente encontrada: {candidate}")
-                    return candidate
+                result = candidate.strftime("%Y-%m-%d")
+                print(f"   ✓ CSV encontrado: {result}")
+                return result
+        except Exception:
+            pass
+
+        try:
+            # Fallback: GET con Range para no descargar el archivo completo
+            h = {**HEADERS, "Range": "bytes=0-200"}
+            resp = requests.get(url, headers=h, timeout=10)
+            if resp.status_code in (200, 206):
+                result = candidate.strftime("%Y-%m-%d")
+                print(f"   ✓ CSV encontrado: {result}")
+                return result
         except Exception:
             continue
 
-    raise ValueError("No se encontró ninguna fecha reciente en FINRA (últimos 45 días)")
+    raise ValueError("No se encontró CSV de FINRA en los últimos 45 días")
 
-    resp = requests.post(FINRA_URL, headers=HEADERS, json=payload, timeout=30)
+
+# ── descargar y parsear el CSV ────────────────────────────────────────────────
+
+def download_csv(settlement_date: str) -> pd.DataFrame:
+    """Descarga el CSV bulk de FINRA y lo normaliza."""
+    date_nodash = settlement_date.replace("-", "")
+    url         = FINRA_CSV_URL.format(date=date_nodash)
+
+    print(f"   Descargando: {url}")
+    resp = requests.get(url, headers=HEADERS, timeout=120)
     resp.raise_for_status()
-    data = resp.json()
 
-    if not data:
-        raise ValueError("FINRA no devolvio datos recientes (ultimos 2 años)")
+    content = resp.content
 
-    dates = sorted(
-        {r["settlementDate"] for r in data if r.get("settlementDate")},
-        reverse=True,
-    )
+    # Intentar parsear como pipe-delimited (formato FINRA estándar)
+    for sep in ("|", ",", "\t"):
+        try:
+            df = pd.read_csv(
+                io.BytesIO(content),
+                sep=sep,
+                encoding="utf-8",
+                on_bad_lines="skip",
+                dtype=str,
+            )
+            if len(df.columns) >= 3:
+                break
+        except Exception:
+            continue
 
-    if not dates:
-        raise ValueError("No se encontraron settlementDates en el sample")
+    print(f"   Columnas del CSV: {list(df.columns)}")
+    print(f"   Total filas:      {len(df):,}")
 
-    print(f"   Fechas recientes encontradas: {dates[:5]}")
-    return dates[0]   # la más reciente
+    # ── Mapear columnas al formato interno ────────────────────────────────────
+    col = {c.strip(): c for c in df.columns}   # lookup case-insensitive
+    rename = {}
 
-
-# ── bulk download ─────────────────────────────────────────────────────────────
-
-def download_bulk(settlement_date: str, field_map: dict) -> pd.DataFrame:
-    """Descarga todos los tickers para una fecha de settlement."""
-    all_rows = []
-    offset   = 0
-    limit    = 5000
-
-    finra_fields = list(field_map.keys())
-
-    # Asegurar que exchange se descarga si está disponible
-    if "issuerServicesGroupExchangeCode" not in finra_fields:
-        finra_fields.append("issuerServicesGroupExchangeCode")
-
-    print(f"   Descargando FINRA -- fecha: {settlement_date}")
-
-    while True:
-        payload = {
-            "limit":  limit,
-            "offset": offset,
-            "fields": finra_fields,
-            "compareFilters": [
-                {
-                    "fieldName":   "settlementDate",
-                    "fieldValue":  settlement_date,
-                    "compareType": "EQUAL",
-                }
-            ],
-        }
-
-        resp = requests.post(FINRA_URL, headers=HEADERS, json=payload, timeout=60)
-
-        if resp.status_code == 400:
-            print(f"   [!] 400 en descarga offset={offset}. Reintentando sin fields...")
-            payload.pop("fields", None)
-            resp = requests.post(FINRA_URL, headers=HEADERS, json=payload, timeout=60)
-
-        resp.raise_for_status()
-        batch = resp.json()
-
-        if not batch:
+    # ticker / symbol
+    for candidate in ["symbolCode", "Symbol", "symbol", "SYMBOL", "Ticker",
+                       "SecuritySymbol", "IssueSymbol", "Issue Symbol",
+                       "securitiesInformationProcessorSymbolIdentifier"]:
+        if candidate in col:
+            rename[col[candidate]] = "ticker"
             break
 
-        all_rows.extend(batch)
-        print(f"     ... {len(all_rows):,} filas")
-
-        if len(batch) < limit:
-            break
-        offset += limit
-
-    print(f"   Total: {len(all_rows):,} filas")
-
-    df = pd.DataFrame(all_rows)
-
-    # Aplicar mapeo dinámico
-    rename = {k: v for k, v in field_map.items() if k in df.columns}
-
-    # market: tomar el que esté disponible
-    for mkt_field in ("marketClassCode", "marketCategoryCode"):
-        if mkt_field in df.columns and "market" not in rename.values():
-            rename[mkt_field] = "market"
+    # short interest
+    for candidate in ["currentShortPositionQuantity", "CurrentShortInterest",
+                       "Current Short Interest", "ShortInterest", "Short Interest",
+                       "ShortPosition", "currentShortInterest", "SHORT_INTEREST",
+                       "TotalShortInterest", "currentShortShareNumber"]:
+        if candidate in col:
+            rename[col[candidate]] = "short_interest_shares"
             break
 
-    # exchange: campo clave para filtrar NYSE/NASDAQ
-    if "issuerServicesGroupExchangeCode" in df.columns and "exchange" not in rename.values():
-        rename["issuerServicesGroupExchangeCode"] = "exchange"
+    # market / exchange
+    for candidate in ["Market", "market", "Exchange", "exchange",
+                       "MarketClassCode", "ExchangeCode"]:
+        if candidate in col:
+            rename[col[candidate]] = "market"
+            break
+
+    if "ticker" not in rename.values():
+        raise ValueError(
+            f"No se encontró columna de ticker. Columnas disponibles: {list(df.columns)}"
+        )
+    if "short_interest_shares" not in rename.values():
+        raise ValueError(
+            f"No se encontró columna de short interest. Columnas: {list(df.columns)}"
+        )
 
     df = df.rename(columns=rename)
+    df["date"] = pd.to_datetime(settlement_date)
 
-    keep = [c for c in ["ticker", "date", "short_interest_shares", "market", "exchange"]
+    keep = [c for c in ["ticker", "date", "short_interest_shares", "market"]
             if c in df.columns]
     df = df[keep].copy()
 
-    df["date"]                  = pd.to_datetime(df["date"])
-    df["short_interest_shares"] = pd.to_numeric(df["short_interest_shares"], errors="coerce")
-    df = df.dropna(subset=["ticker", "date", "short_interest_shares"])
+    df["ticker"]                = df["ticker"].astype(str).str.upper().str.strip()
+    df["short_interest_shares"] = pd.to_numeric(
+        df["short_interest_shares"].astype(str).str.replace(",", ""),
+        errors="coerce"
+    )
+    df = df.dropna(subset=["ticker", "short_interest_shares"])
+    df = df[df["ticker"].str.match(r"^[A-Z]")]  # descartar filas de metadata
 
-    # Mostrar distribución de exchanges para diagnóstico
-    if "exchange" in df.columns:
-        print(f"\n   Distribución de exchanges (top 15):")
-        print(df["exchange"].value_counts().head(15).to_string())
-    elif "market" in df.columns:
-        print(f"\n   Distribución de market:")
+    if "market" in df.columns:
+        print(f"\n   Distribución de mercados (top 10):")
         print(df["market"].value_counts().head(10).to_string())
 
     return df
@@ -241,7 +176,7 @@ def download_bulk(settlement_date: str, field_map: dict) -> pd.DataFrame:
 def save_raw(df: pd.DataFrame, settlement_date: str) -> Path:
     out = RAW_DIR / f"{settlement_date}.parquet"
     df.to_parquet(out, index=False)
-    print(f"   Guardado: data/raw/{settlement_date}.parquet  ({len(df):,} filas)")
+    print(f"\n   Guardado: data/raw/{settlement_date}.parquet  ({len(df):,} filas)")
     return out
 
 
@@ -257,21 +192,16 @@ def mark_downloaded(settlement_date: str):
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def run_extract():
-    print("\n[EXTRACT] Verificando FINRA...")
+    print("\n[EXTRACT] Buscando datos de FINRA...")
 
-    field_map, all_fields = discover_fields()
-    latest = fetch_latest_date(all_fields)
-    print(f"   Fecha más reciente en FINRA: {latest}")
-
-    if not latest:
-        raise ValueError("No se pudo determinar la fecha más reciente de FINRA")
+    latest = find_latest_date()
 
     if _already_downloaded(latest):
         print(f"   Ya tenemos {latest} -- nada que descargar.")
         path = RAW_DIR / f"{latest}.parquet"
         return pd.read_parquet(path) if path.exists() else None
 
-    df = download_bulk(latest, field_map)
+    df = download_csv(latest)
     save_raw(df, latest)
     mark_downloaded(latest)
 
@@ -281,7 +211,6 @@ def run_extract():
 if __name__ == "__main__":
     df = run_extract()
     if df is not None:
-        print("\nPrimeras filas:")
-        print(df.head(10).to_string())
+        print("\nMuestra:")
+        print(df.head(15).to_string())
         print(f"\nShape: {df.shape}")
-        print(f"Columnas: {list(df.columns)}")
