@@ -200,14 +200,16 @@ def download_and_parse(d: date) -> pd.DataFrame | None:
 # ── Actualizar history_shares.parquet ────────────────────────────────────────
 
 def append_to_history(new_df: pd.DataFrame):
-    """Agrega nuevas filas al historial, evitando duplicados."""
+    df = new_df.rename(columns={"short_interest_shares": "value"})
     if HISTORY_PATH.exists():
         existing = pd.read_parquet(HISTORY_PATH)
-        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = pd.concat([existing, df], ignore_index=True)
     else:
-        combined = new_df
-
+        combined = df
     combined = combined.drop_duplicates(subset=["ticker", "date"])
+    combined = combined.sort_values(["ticker", "date"])
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_parquet(HISTORY_PATH, index=False)
     combined = combined.sort_values(["ticker", "date"])
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     combined.to_parquet(HISTORY_PATH, index=False)
