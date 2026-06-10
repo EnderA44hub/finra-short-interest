@@ -141,10 +141,13 @@ def fetch_float(tickers: list[str]) -> pd.DataFrame:
     result = []
 
     # ── 1. Separar cache vigente vs fetch necesario ───────────────────────────
+    # Re-fetchear también si falta market_cap (cache del formato viejo)
     needs_fetch = []
     for t in tickers:
         row = cache[cache["ticker"] == t]
-        if row.empty or _is_stale(row.iloc[0]["fetched_at"]):
+        if (row.empty
+                or _is_stale(row.iloc[0]["fetched_at"])
+                or pd.isna(row.iloc[0]["market_cap"])):
             needs_fetch.append(t)
         else:
             result.append({

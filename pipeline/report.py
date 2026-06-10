@@ -141,8 +141,9 @@ def _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc) -> list:
     rows = []
     for _, r in df.iterrows():
         rows.append({
-            "ticker":      r["ticker"],
-            "mcap":        _fmt_mcap(r.get("market_cap")),
+            "ticker":        r["ticker"],
+            "si_shares_fmt": f"{r['si_shares']:,.0f}" if pd.notna(r.get("si_shares")) else "—",
+            "mcap":          _fmt_mcap(r.get("market_cap")),
             "si_pct":      round(float(r["float_pct"]), 1),
             "si_pct_fmt":  f"{r['float_pct']:.1f}%",
             "dtc":         round(float(r["days_to_cover"]), 1) if pd.notna(r.get("days_to_cover")) else None,
