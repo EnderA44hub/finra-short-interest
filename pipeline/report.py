@@ -23,7 +23,7 @@ SHARES_HIST = HISTORY_DIR / "history_shares.parquet"
 FLOAT_HIST  = HISTORY_DIR / "history_float.parquet"
 
 SQUEEZE_MIN_MCAP = 50e6   # ignorar micro-caps ilíquidas en el screen
-SQUEEZE_TOP_N    = 150    # filas máximas del Squeeze Screen
+SQUEEZE_TOP_N    = 500    # filas máximas — amplio para que el filtro de mcap tenga material
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -144,6 +144,7 @@ def _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc) -> list:
             "ticker":        r["ticker"],
             "si_shares_fmt": f"{r['si_shares']:,.0f}" if pd.notna(r.get("si_shares")) else "—",
             "mcap":          _fmt_mcap(r.get("market_cap")),
+            "mcap_raw":      float(r["market_cap"]) if pd.notna(r.get("market_cap")) else 0,
             "si_pct":      round(float(r["float_pct"]), 1),
             "si_pct_fmt":  f"{r['float_pct']:.1f}%",
             "dtc":         round(float(r["days_to_cover"]), 1) if pd.notna(r.get("days_to_cover")) else None,
@@ -304,6 +305,13 @@ def run_report():
     <button class="filter-btn" data-flag="ATH">🔴 ATH</button>
     <button class="filter-btn" data-flag="NEAR_HIGH">🟠 Near High</button>
   </span>
+  <span id="mcap-filters" style="display:none; gap:6px;">
+    <button class="filter-btn mcap-btn active" data-mcap="0">Todas</button>
+    <button class="filter-btn mcap-btn" data-mcap="300000000">$300M+</button>
+    <button class="filter-btn mcap-btn" data-mcap="1000000000">$1B+</button>
+    <button class="filter-btn mcap-btn" data-mcap="5000000000">$5B+</button>
+    <button class="filter-btn mcap-btn" data-mcap="10000000000">$10B+</button>
+  </span>
   <span id="count" style="color:var(--muted);font-size:0.8rem;margin-left:auto;"></span>
 </div>
 
@@ -347,6 +355,7 @@ const SPARK_FLOAT  = {json.dumps(spark_float,  ensure_ascii=False)};
 
 let activeTab    = 'shares';
 let activeFilter = 'ALL';
+let activeMcap   = 0;
 let chartInstance = null;
 
 // ── Heatmap helpers ─────────────────────────────────────────────────────────
@@ -411,6 +420,15 @@ function renderTable() {{
   let data    = tab.data().filter(r => r.ticker.includes(q));
   if (activeFilter !== 'ALL') data = data.filter(r => r.flag === activeFilter);
 
+  // Filtro de market cap — solo aplica en Squeeze Screen
+  if (activeTab === 'squeeze' && activeMcap > 0) {{
+    data = data.filter(r => (r.mcap_raw || 0) >= activeMcap);
+  }}
+
+  // Mostrar botones de mcap solo en la tab squeeze
+  document.getElementById('mcap-filters').style.display =
+    activeTab === 'squeeze' ? 'inline-flex' : 'none';
+
   document.getElementById('table-head').innerHTML = tab.head;
   const tbody = document.getElementById('table-body');
   tbody.innerHTML = '';
@@ -435,11 +453,20 @@ document.querySelectorAll('.tab').forEach(btn => {{
 
 document.getElementById('search').addEventListener('input', renderTable);
 
-document.querySelectorAll('.filter-btn').forEach(btn => {{
+document.querySelectorAll('#flag-filters .filter-btn').forEach(btn => {{
   btn.addEventListener('click', () => {{
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#flag-filters .filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     activeFilter = btn.dataset.flag;
+    renderTable();
+  }});
+}});
+
+document.querySelectorAll('.mcap-btn').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    document.querySelectorAll('.mcap-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeMcap = Number(btn.dataset.mcap);
     renderTable();
   }});
 }});
