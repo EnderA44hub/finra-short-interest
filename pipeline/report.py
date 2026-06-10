@@ -66,6 +66,31 @@ def _load_days_to_cover() -> pd.DataFrame:
     return pd.DataFrame(columns=["ticker", "days_to_cover"])
 
 
+def _si_change_6m(shares_hist: pd.DataFrame, tickers: set) -> pd.DataFrame:
+    """
+    Calcula el cambio % del SI (shares) en los últimos ~6 meses por ticker.
+    Positivo = los cortos están agregando posición. Negativo = cubriendo.
+    """
+    rows = []
+    sub  = shares_hist[shares_hist["ticker"].isin(tickers)]
+    if sub.empty:
+        return pd.DataFrame(columns=["ticker", "si_chg_6m"])
+
+    cutoff = sub["date"].max() - pd.Timedelta(days=183)
+
+    for t, g in sub.groupby("ticker"):
+        g = g.sort_values("date")
+        cur = g["value"].iloc[-1]
+        old = g[g["date"] <= cutoff]
+        if old.empty:
+            continue
+        o = old["value"].iloc[-1]
+        if o and o > 0:
+            rows.append({"ticker": t, "si_chg_6m": (cur / o - 1) * 100})
+
+    return pd.DataFrame(rows)
+
+
 # ── carga de datos ────────────────────────────────────────────────────────────
 
 def _load_data():
@@ -119,14 +144,17 @@ def _build_float_rows(float_snap: pd.DataFrame) -> list:
     return rows
 
 
-def _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc) -> list:
+def _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc, shares_hist) -> list:
     """Tabla estilo Freshly Squeezed, ordenada por Short Float % desc."""
     df = float_snap.rename(columns={"current": "float_pct"})[
         ["ticker", "float_pct", "flag"]
     ].copy()
 
+    # Flag del pipeline de SHARES (3 años de historia — el confiable para ATH)
     df = df.merge(
-        shares_snap[["ticker", "current"]].rename(columns={"current": "si_shares"}),
+        shares_snap[["ticker", "current", "flag"]].rename(columns={
+            "current": "si_shares", "flag": "flag_shares",
+        }),
         on="ticker", how="left",
     )
     df = df.merge(yahoo, on="ticker", how="left")
@@ -138,22 +166,32 @@ def _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc) -> list:
 
     df = df.sort_values("float_pct", ascending=False).head(SQUEEZE_TOP_N)
 
+    # Tendencia del SI en 6 meses (solo para los tickers del screen)
+    si_trend = _si_change_6m(shares_hist, set(df["ticker"]))
+    df = df.merge(si_trend, on="ticker", how="left")
+
     rows = []
     for _, r in df.iterrows():
+        flag_sh = r.get("flag_shares") if pd.notna(r.get("flag_shares")) else "NORMAL"
         rows.append({
             "ticker":        r["ticker"],
             "si_shares_fmt": f"{r['si_shares']:,.0f}" if pd.notna(r.get("si_shares")) else "—",
             "mcap":          _fmt_mcap(r.get("market_cap")),
             "mcap_raw":      float(r["market_cap"]) if pd.notna(r.get("market_cap")) else 0,
-            "si_pct":      round(float(r["float_pct"]), 1),
-            "si_pct_fmt":  f"{r['float_pct']:.1f}%",
-            "dtc":         round(float(r["days_to_cover"]), 1) if pd.notna(r.get("days_to_cover")) else None,
-            "dtc_fmt":     f"{r['days_to_cover']:.1f}" if pd.notna(r.get("days_to_cover")) else "—",
-            "ytd":         round(float(r["ytd_change"]), 1) if pd.notna(r.get("ytd_change")) else None,
-            "ytd_fmt":     f"{r['ytd_change']:+.0f}%" if pd.notna(r.get("ytd_change")) else "—",
-            "off_low":     round(float(r["pct_off_52wk_low"]), 1) if pd.notna(r.get("pct_off_52wk_low")) else None,
-            "off_low_fmt": f"{r['pct_off_52wk_low']:.0f}%" if pd.notna(r.get("pct_off_52wk_low")) else "—",
-            "flag":        r.get("flag", "NORMAL"),
+            "si_pct":        round(float(r["float_pct"]), 1),
+            "si_pct_fmt":    f"{r['float_pct']:.1f}%",
+            "dsi6":          round(float(r["si_chg_6m"]), 1) if pd.notna(r.get("si_chg_6m")) else None,
+            "dsi6_fmt":      f"{r['si_chg_6m']:+.0f}%" if pd.notna(r.get("si_chg_6m")) else "—",
+            "dtc":           round(float(r["days_to_cover"]), 1) if pd.notna(r.get("days_to_cover")) else None,
+            "dtc_fmt":       f"{r['days_to_cover']:.1f}" if pd.notna(r.get("days_to_cover")) else "—",
+            "ytd":           round(float(r["ytd_change"]), 1) if pd.notna(r.get("ytd_change")) else None,
+            "ytd_fmt":       f"{r['ytd_change']:+.0f}%" if pd.notna(r.get("ytd_change")) else "—",
+            "off_high":      round(float(r["pct_off_52wk_high"]), 1) if pd.notna(r.get("pct_off_52wk_high")) else None,
+            "off_high_fmt":  f"{r['pct_off_52wk_high']:.0f}%" if pd.notna(r.get("pct_off_52wk_high")) else "—",
+            "off_low":       round(float(r["pct_off_52wk_low"]), 1) if pd.notna(r.get("pct_off_52wk_low")) else None,
+            "off_low_fmt":   f"{r['pct_off_52wk_low']:.0f}%" if pd.notna(r.get("pct_off_52wk_low")) else "—",
+            "flag":          r.get("flag", "NORMAL"),
+            "flag_sh":       flag_sh,
         })
     return rows
 
@@ -167,7 +205,7 @@ def run_report():
 
     shares_rows  = _build_shares_rows(shares_snap)
     float_rows   = _build_float_rows(float_snap)
-    squeeze_rows = _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc)
+    squeeze_rows = _build_squeeze_rows(shares_snap, float_snap, yahoo, dtc, shares_hist)
 
     # Sparklines para todos los tickers que aparecen en alguna tab
     visible = (
@@ -294,7 +332,11 @@ def run_report():
     Cuántos días de volumen completo necesitarían los cortos para cerrar todas sus posiciones.
     Un DTC alto significa que los cortos están atrapados: si el precio sube, su propia compra forzada acelera el movimiento — el mecanismo del squeeze.<br><br>
     <b>La relación:</b> Short Float % alto = mucha presión bajista relativa.
-    DTC alto = difícil escapar. Ambos altos al mismo tiempo es la receta clásica del short squeeze.
+    DTC alto = difícil escapar. Ambos altos al mismo tiempo es la receta clásica del short squeeze.<br><br>
+    <b>⚠️ Nota sobre los flags:</b> el flag de la tab <b>SI Shares</b> y del <b>Squeeze Screen</b>
+    usa 3 años de historia FINRA — es el confiable. El flag de la tab <b>Short Float %</b>
+    tiene historial joven (empezó con este monitor) y marcará "ATH" con facilidad hasta
+    acumular meses de datos. Ante la duda, abrí el gráfico del ticker y mirá la línea azul.
   </div>
 </details>
 
@@ -311,6 +353,11 @@ def run_report():
     <button class="filter-btn mcap-btn" data-mcap="1000000000">$1B+</button>
     <button class="filter-btn mcap-btn" data-mcap="5000000000">$5B+</button>
     <button class="filter-btn mcap-btn" data-mcap="10000000000">$10B+</button>
+  </span>
+  <span id="sig-filters" style="display:none; gap:6px;">
+    <button class="filter-btn" id="f-nearhigh" title="Precio a menos de 15% de su máximo de 52 semanas">📈 Cerca de máximos</button>
+    <button class="filter-btn" id="f-siath" title="Short Interest (shares) en máximo histórico o cerca">🧨 SI en ATH</button>
+    <button class="filter-btn" id="f-sirising" title="Los cortos agregaron posición en los últimos 6 meses">➕ SI subiendo</button>
   </span>
   <span id="count" style="color:var(--muted);font-size:0.8rem;margin-left:auto;"></span>
 </div>
@@ -356,6 +403,9 @@ const SPARK_FLOAT  = {json.dumps(spark_float,  ensure_ascii=False)};
 let activeTab    = 'shares';
 let activeFilter = 'ALL';
 let activeMcap   = 0;
+let fNearHigh    = false;   // precio a ≤15% del máximo 52wk
+let fSiAth       = false;   // SI shares en ATH / Near High
+let fSiRising    = false;   // SI subió en los últimos 6 meses
 let chartInstance = null;
 
 // ── Heatmap helpers ─────────────────────────────────────────────────────────
@@ -401,16 +451,18 @@ const TABS = {{
       <td>${{badge(r.flag)}}</td>`,
   }},
   squeeze: {{
-    head: '<tr><th>Ticker</th><th>Market Cap</th><th>Short Float %</th><th>Days to Cover</th><th>YTD</th><th>% Off 52-Wk Low</th><th>Flag</th></tr>',
+    head: '<tr><th>Ticker</th><th>Market Cap</th><th>Short Float %</th><th>Δ SI 6m</th><th>Days to Cover</th><th>YTD</th><th>% Off 52-Wk High</th><th>% Off 52-Wk Low</th><th>Flag</th></tr>',
     data: () => SQUEEZE_ROWS,
     row: r => `
       <td class="ticker-cell">${{r.ticker}}</td>
       <td class="num">${{r.mcap}}</td>
       <td class="heat" style="${{heatGreen(r.si_pct, 5, 40)}}">${{r.si_pct_fmt}}</td>
+      <td class="heat" style="${{heatRedGreen(r.dsi6, 80)}}">${{r.dsi6_fmt}}</td>
       <td class="heat" style="${{heatGreen(r.dtc, 1, 15)}}">${{r.dtc_fmt}}</td>
       <td class="heat" style="${{heatRedGreen(r.ytd, 100)}}">${{r.ytd_fmt}}</td>
+      <td class="heat" style="${{heatGreen(r.off_high, -50, 0)}}">${{r.off_high_fmt}}</td>
       <td class="heat" style="${{heatGreen(r.off_low, 0, 200)}}">${{r.off_low_fmt}}</td>
-      <td>${{badge(r.flag)}}</td>`,
+      <td>${{badge(r.flag_sh)}}</td>`,
   }},
 }};
 
@@ -418,16 +470,25 @@ function renderTable() {{
   const tab   = TABS[activeTab];
   const q     = document.getElementById('search').value.toUpperCase();
   let data    = tab.data().filter(r => r.ticker.includes(q));
-  if (activeFilter !== 'ALL') data = data.filter(r => r.flag === activeFilter);
-
-  // Filtro de market cap — solo aplica en Squeeze Screen
-  if (activeTab === 'squeeze' && activeMcap > 0) {{
-    data = data.filter(r => (r.mcap_raw || 0) >= activeMcap);
+  if (activeFilter !== 'ALL') {{
+    // En el Squeeze Screen el flag mostrado/filtrado es el de SHARES (3 años de historia)
+    data = data.filter(r =>
+      (activeTab === 'squeeze' ? r.flag_sh : r.flag) === activeFilter
+    );
   }}
 
-  // Mostrar botones de mcap solo en la tab squeeze
-  document.getElementById('mcap-filters').style.display =
-    activeTab === 'squeeze' ? 'inline-flex' : 'none';
+  // Filtros del Squeeze Screen
+  if (activeTab === 'squeeze') {{
+    if (activeMcap > 0) data = data.filter(r => (r.mcap_raw || 0) >= activeMcap);
+    if (fNearHigh)      data = data.filter(r => r.off_high !== null && r.off_high >= -15);
+    if (fSiAth)         data = data.filter(r => r.flag_sh === 'ATH' || r.flag_sh === 'NEAR_HIGH');
+    if (fSiRising)      data = data.filter(r => r.dsi6 !== null && r.dsi6 > 0);
+  }}
+
+  // Mostrar controles del squeeze solo en su tab
+  const squeezeVisible = activeTab === 'squeeze' ? 'inline-flex' : 'none';
+  document.getElementById('mcap-filters').style.display = squeezeVisible;
+  document.getElementById('sig-filters').style.display  = squeezeVisible;
 
   document.getElementById('table-head').innerHTML = tab.head;
   const tbody = document.getElementById('table-body');
@@ -469,6 +530,23 @@ document.querySelectorAll('.mcap-btn').forEach(btn => {{
     activeMcap = Number(btn.dataset.mcap);
     renderTable();
   }});
+}});
+
+// Toggles de la firma (combinables entre sí)
+document.getElementById('f-nearhigh').addEventListener('click', function() {{
+  fNearHigh = !fNearHigh;
+  this.classList.toggle('active', fNearHigh);
+  renderTable();
+}});
+document.getElementById('f-siath').addEventListener('click', function() {{
+  fSiAth = !fSiAth;
+  this.classList.toggle('active', fSiAth);
+  renderTable();
+}});
+document.getElementById('f-sirising').addEventListener('click', function() {{
+  fSiRising = !fSiRising;
+  this.classList.toggle('active', fSiRising);
+  renderTable();
 }});
 
 // ── Modal con gráfico ───────────────────────────────────────────────────────

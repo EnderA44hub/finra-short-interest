@@ -96,6 +96,7 @@ def fetch_price_metrics(tickers: list[str]) -> pd.DataFrame:
 
                 price    = float(hist["Close"].iloc[-1])
                 low_52wk = float(hist["Low"].min())
+                high_52wk = float(hist["High"].max())
 
                 # YTD: primer cierre del año actual
                 ytd_hist = hist[hist.index >= year_start]
@@ -105,14 +106,17 @@ def fetch_price_metrics(tickers: list[str]) -> pd.DataFrame:
                 else:
                     ytd_change = None
 
-                pct_off_low = (price / low_52wk - 1) * 100 if low_52wk else None
+                pct_off_low  = (price / low_52wk - 1) * 100 if low_52wk else None
+                pct_off_high = (price / high_52wk - 1) * 100 if high_52wk else None
 
                 rows.append({
-                    "ticker":           t,
-                    "price":            round(price, 2),
-                    "low_52wk":         round(low_52wk, 2),
-                    "pct_off_52wk_low": round(pct_off_low, 1) if pct_off_low is not None else None,
-                    "ytd_change":       round(ytd_change, 1)  if ytd_change is not None else None,
+                    "ticker":            t,
+                    "price":             round(price, 2),
+                    "low_52wk":          round(low_52wk, 2),
+                    "high_52wk":         round(high_52wk, 2),
+                    "pct_off_52wk_low":  round(pct_off_low, 1) if pct_off_low is not None else None,
+                    "pct_off_52wk_high": round(pct_off_high, 1) if pct_off_high is not None else None,
+                    "ytd_change":        round(ytd_change, 1) if ytd_change is not None else None,
                 })
             except Exception:
                 continue
