@@ -140,6 +140,19 @@ def download_csv(settlement_date: str) -> pd.DataFrame:
             rename[col[candidate]] = "market"
             break
 
+    # days to cover (para Squeeze Screen)
+    for candidate in ["daysToCoverQuantity", "DaysToCover", "Days to Cover"]:
+        if candidate in col:
+            rename[col[candidate]] = "days_to_cover"
+            break
+
+    # volumen promedio diario
+    for candidate in ["averageDailyVolumeQuantity", "AverageDailyVolume",
+                       "Average Daily Volume"]:
+        if candidate in col:
+            rename[col[candidate]] = "avg_daily_volume"
+            break
+
     if "ticker" not in rename.values():
         raise ValueError(
             f"No se encontró columna de ticker. Columnas disponibles: {list(df.columns)}"
@@ -152,7 +165,8 @@ def download_csv(settlement_date: str) -> pd.DataFrame:
     df = df.rename(columns=rename)
     df["date"] = pd.to_datetime(settlement_date)
 
-    keep = [c for c in ["ticker", "date", "short_interest_shares", "market"]
+    keep = [c for c in ["ticker", "date", "short_interest_shares", "market",
+                         "days_to_cover", "avg_daily_volume"]
             if c in df.columns]
     df = df[keep].copy()
 
@@ -161,6 +175,11 @@ def download_csv(settlement_date: str) -> pd.DataFrame:
         df["short_interest_shares"].astype(str).str.replace(",", ""),
         errors="coerce"
     )
+    for numcol in ("days_to_cover", "avg_daily_volume"):
+        if numcol in df.columns:
+            df[numcol] = pd.to_numeric(
+                df[numcol].astype(str).str.replace(",", ""), errors="coerce"
+            )
     df = df.dropna(subset=["ticker", "short_interest_shares"])
     df = df[df["ticker"].str.match(r"^[A-Z]")]  # descartar filas de metadata
 
