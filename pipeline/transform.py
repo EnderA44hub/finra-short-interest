@@ -17,8 +17,10 @@ from pathlib import Path
 ROOT          = Path(__file__).parent.parent
 PROCESSED_DIR = ROOT / "data" / "processed"
 
-# Sufijos OTC del 5to carácter (Pink Sheet / foreign / delinquent)
-OTC_FIFTH_LETTER = {"F", "Y", "E", "Q", "K"}
+# Sufijos del 5to carácter que NO son common stocks operables:
+#   F/Y = foreign/ADR OTC · E = delinquent · Q = bankruptcy · K = non-voting OTC
+#   P = preferred · U = units · W = warrants · R = rights
+OTC_FIFTH_LETTER = {"F", "Y", "E", "Q", "K", "P", "U", "W", "R"}
 
 # NASDAQ Screener API — devuelve todos los tickers listados en cada exchange
 _SCREENER_URLS = [

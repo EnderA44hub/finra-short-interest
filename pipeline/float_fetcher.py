@@ -16,6 +16,7 @@ Estrategia de eficiencia:
 Cache: data/cache/float_cache.parquet
 """
 
+import time
 import pandas as pd
 import yfinance as yf
 from pathlib import Path
@@ -184,6 +185,9 @@ def fetch_float(tickers: list[str]) -> pd.DataFrame:
                 })
         except Exception:
             pass    # ticker inválido o sin dato — se omite
+
+        # Pausa anti rate-limit: alarga la corrida pero multiplica el rendimiento
+        time.sleep(0.3)
 
         if idx % 500 == 0:
             print(f"      ... {idx:,}/{len(needs_fetch):,} (.info)")
