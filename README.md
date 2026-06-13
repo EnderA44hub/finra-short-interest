@@ -1,67 +1,52 @@
 # FINRA Short Interest Monitor
 
-Detecta automáticamente qué tickers NYSE/NASDAQ tienen su **short interest en máximos históricos** o cerca de ellos, publicando una página interactiva en GitHub Pages.
+Automatically detects which NYSE/NASDAQ tickers have their short interest at or near all-time highs, publishing an interactive page via GitHub Pages.
 
-## Qué hace
-
-- Descarga el bulk file de FINRA 2x al mes (settlement dates)
-- Acumula serie histórica de short interest en shares y en float %
-- Detecta ATH 🔴 y Near High 🟠 por ticker
-- Genera `docs/index.html` con gráficos estilo Koyfin
-- Se auto-actualiza vía GitHub Actions
+## What it does
+- Downloads FINRA bulk file 2x per month (settlement dates)
+- Accumulates historical short interest series in shares and float %
+- Detects ATH 🔴 and Near High 🟠 per ticker
+- Generates docs/index.html with Koyfin-style charts
+- Auto-updates via GitHub Actions
 
 ## Setup
-
-```bash
-git clone https://github.com/TU-USER/finra-short-interest
+git clone https://github.com/EnderA44hub/finra-short-interest
 cd finra-short-interest
-
-# Crear estructura de carpetas
 python setup.py
-
-# Instalar dependencias
 pip install -r requirements.txt
-
-# Correr el pipeline manualmente
 python pipeline/run_pipeline.py
-```
 
-## Activar GitHub Pages
+## Activate GitHub Pages
+1. Go to Settings → Pages
+2. Source: Deploy from a branch
+3. Branch: main / folder: /docs
+4. URL: https://EnderA44hub.github.io/finra-short-interest/
 
-1. Ir a **Settings → Pages**
-2. Source: `Deploy from a branch`
-3. Branch: `main` / folder: `/docs`
-4. La URL será: `https://TU-USER.github.io/finra-short-interest/`
-
-## Estructura
-
-```
+## Structure
 finra-short-interest/
-├── setup.py                    ← crear carpetas (ejecutar 1 vez)
+├── setup.py
 ├── requirements.txt
 ├── pipeline/
-│   ├── extract.py              ← descarga FINRA
-│   ├── validate.py             ← quality checks
-│   ├── transform.py            ← filtro NYSE/NASDAQ
-│   ├── analyze.py              ← ATH / Near High
-│   ├── float_fetcher.py        ← Yahoo Finance float
-│   ├── report.py               ← genera index.html
-│   └── run_pipeline.py         ← orquestador
+│   ├── extract.py
+│   ├── validate.py
+│   ├── transform.py
+│   ├── analyze.py
+│   ├── float_fetcher.py
+│   ├── report.py
+│   └── run_pipeline.py
 ├── data/
-│   ├── history/                ← serie histórica acumulada ✅ en git
-│   ├── latest/                 ← snapshot actual ✅ en git
-│   ├── registry.json           ← control de fechas ✅ en git
-│   ├── raw/                    ← bulk FINRA ❌ en .gitignore
-│   └── processed/              ❌ en .gitignore
+│   ├── history/
+│   ├── latest/
+│   ├── registry.json
+│   ├── raw/
+│   └── processed/
 ├── docs/
-│   └── index.html              ← GitHub Pages ✅ en git
+│   └── index.html
 └── .github/workflows/
-    └── pipeline.yml            ← cron 2x al mes
-```
+    └── pipeline.yml
 
 ## Flags
-
-| Flag | Criterio |
+| Flag | Criteria |
 |------|----------|
-| 🔴 ATH | Short interest == máximo de toda la historia |
-| 🟠 Near High | Short interest >= percentil 95% histórico |
+| 🔴 ATH | Short interest == all-time high |
+| 🟠 Near High | Short interest >= 95th percentile historically |
