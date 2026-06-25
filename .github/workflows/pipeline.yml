@@ -2,24 +2,22 @@ name: Update Short Interest Monitor
 
 on:
   schedule:
-    # FINRA publica ~día 9 y ~día 24 de cada mes
-    # Corremos el día siguiente a cada publicación
     - cron: '0 14 10,25 * *'
-  workflow_dispatch:   # permite correr manualmente desde Actions tab
+  workflow_dispatch:
 
 permissions:
-  contents: write      # necesario para hacer push del index.html y parquets
+  contents: write
 
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 90   # Yahoo Finance puede ser lento con 9k tickers
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # historia completa para que los parquets acumulen bien
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -29,6 +27,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Create folder structure
+        run: mkdir -p data/raw data/processed data/history data/latest data/cache docs logs
 
       - name: Run pipeline
         run: python pipeline/run_pipeline.py
